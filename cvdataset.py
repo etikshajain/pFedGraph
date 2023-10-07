@@ -36,8 +36,8 @@ def cifar_dataset_read(dataset, base_path, batch_size, n_parties, partition, bet
             [transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010))])
     elif dataset == "cifar100":
-        train_dataset = CIFAR100(base_path, True)
-        test_dataset = CIFAR100(base_path, False)
+        train_dataset = CIFAR100(base_path, True, download=True)
+        test_dataset = CIFAR100(base_path, False, download=True)
         normalize = transforms.Normalize(mean=[0.5070751592371323, 0.48654887331495095, 0.4409178433670343],
                                              std=[0.2673342858792401, 0.2564384629170883, 0.27615047132568404])
         transform_train=transforms.Compose([

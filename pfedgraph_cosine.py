@@ -13,18 +13,22 @@ from pfedgraph_cosine.utils import aggregation_by_graph, update_graph_matrix_nei
 from model import simplecnn, textcnn
 from prepare_data import get_dataloader
 from attack import *
+import json
+import pandas as pd
 
 import ssl
 ssl._create_default_https_context = ssl._create_unverified_context
 
-
 def local_train_pfedgraph(args, round, nets_this_round, cluster_models, train_local_dls, val_local_dls, test_dl, data_distributions, best_val_acc_list, best_test_acc_list, benign_client_list):
+    pers_acc = []
+    gen_acc = []
     
     for net_id, net in nets_this_round.items():
         
         train_local_dl = train_local_dls[net_id]
         data_distribution = data_distributions[net_id]
 
+        # Calucating accuracies of existing models and updating best models list
         if net_id in benign_client_list:
             val_acc = compute_acc(net, val_local_dls[net_id])
             personalized_test_acc, generalized_test_acc = compute_local_test_accuracy(net, test_dl, data_distribution)
@@ -46,6 +50,7 @@ def local_train_pfedgraph(args, round, nets_this_round, cluster_models, train_lo
         if round > 0:
             cluster_model = cluster_models[net_id]
         
+        # Training the clients
         net
         net.train()
         iterator = iter(train_local_dl)
@@ -61,30 +66,37 @@ def local_train_pfedgraph(args, round, nets_this_round, cluster_models, train_lo
             target = target.long()
 
             out = net(x)
+            # Primary loss
             loss = criterion(out, target)
         
-
+            # This kind of regularization can be used to promote cooperation or alignment between the models of different clients within the same cluster in a federated learning context
             if round > 0:
                 flatten_model = []
                 for param in net.parameters():
                     flatten_model.append(param.reshape(-1))
                 flatten_model = torch.cat(flatten_model)
                 loss2 = args.lam * torch.dot(cluster_model, flatten_model) / torch.linalg.norm(flatten_model)
+                # This regularization term encourages similarity between the model's parameters and a cluster model's parameters.
                 loss2.backward()
-                
+            
+            # Backpropagate primary loss
             loss.backward()
+
+            # Update grads using both losses
             optimizer.step()
         
+        # Compute acccuracies of trainined model
         if net_id in benign_client_list:
             val_acc = compute_acc(net, val_local_dls[net_id])
             personalized_test_acc, generalized_test_acc = compute_local_test_accuracy(net, test_dl, data_distribution)
-
+            pers_acc.append(personalized_test_acc)
+            gen_acc.append(generalized_test_acc)
             if val_acc > best_val_acc_list[net_id]:
                 best_val_acc_list[net_id] = val_acc
                 best_test_acc_list[net_id] = personalized_test_acc
             print('>> Client {} test2 | (Pre) Personalized Test Acc: ({:.5f}) | Generalized Test Acc: {:.5f}'.format(net_id, personalized_test_acc, generalized_test_acc))
         net.to('cpu')
-    return np.array(best_test_acc_list)[np.array(benign_client_list)].mean()
+    return np.array(best_test_acc_list)[np.array(benign_client_list)].mean(), pers_acc, gen_acc
 
 
 args, cfg = get_args()
@@ -145,11 +157,16 @@ for net in local_models:
     net.load_state_dict(global_parameters)
 
 # COLLABORATION GRAPH initialisation
-graph_matrix = torch.ones(len(local_models), len(local_models)) / (len(local_models)-1)                 # Collaboration Graph
+graph_matrix = torch.ones(len(local_models), len(local_models)) / (len(local_models)-1)
 graph_matrix[range(len(local_models)), range(len(local_models))] = 0
 
 # Stores the cluster model corresponding to each client 
 cluster_model_vectors = {}
+
+# Lists
+personalised_test_acc_list = [[] for i in range(args.n_parties)]
+generalised_test_acc_list = [[] for i in range(args.n_parties)]
+final_accuracy = []
 
 for round in range(cfg["comm_round"]):
     # List of active clients in each round
@@ -160,10 +177,16 @@ for round in range(cfg["comm_round"]):
     nets_this_round = {k: local_models[k] for k in party_list_this_round}
     nets_param_start = {k: copy.deepcopy(local_models[k]) for k in party_list_this_round}
 
-    # Perform local training at the clients
-    # Calculates the loss that appears to be related to cluster model of each client
-    # Returns the mean test accuracy of benign clients for aggregation at the federated server.
-    mean_personalized_acc = local_train_pfedgraph(args, round, nets_this_round, cluster_model_vectors, train_local_dls, val_local_dls, test_dl, data_distributions, best_val_acc_list, best_test_acc_list, benign_client_list)
+    # Perform local training at the clients with num_itr iterations
+    # Calculates the loss in each itr using the corresponding cluster model
+    # Returns the mean test accuracy of benign clients.
+    mean_personalized_acc, pers_acc, gen_acc = local_train_pfedgraph(args, round, nets_this_round, cluster_model_vectors, train_local_dls, val_local_dls, test_dl, data_distributions, best_val_acc_list, best_test_acc_list, benign_client_list)
+    
+    final_accuracy.append(mean_personalized_acc)
+    for i,acc in enumerate(pers_acc):
+        personalised_test_acc_list[i].append(acc)
+    for i,acc in enumerate(gen_acc):
+        generalised_test_acc_list[i].append(acc)
    
     total_data_points = sum([len(net_dataidx_map[k]) for k in party_list_this_round])
     fed_avg_freqs = {k: len(net_dataidx_map[k]) / total_data_points for k in party_list_this_round}
@@ -177,6 +200,46 @@ for round in range(cfg["comm_round"]):
     cluster_model_vectors = aggregation_by_graph(cfg, graph_matrix, nets_this_round, global_parameters)                                                    # Aggregation weight is normalized here
 
     print('>> (Current) Round {} | Local Per: {:.5f}'.format(round, mean_personalized_acc))
-    print(graph_matrix)
+
+    t_np = graph_matrix.numpy() #convert to Numpy array
+    if round>0:
+        df_old = pd.read_csv(F"/Users/etiksha/Documents/btp/pFedGraph/results/pfedg_cos/{args.dataset}/graph.csv")
+        df = pd.concat([df_old, pd.DataFrame(t_np)]) #convert to a dataframe
+        df.to_csv(F"/Users/etiksha/Documents/btp/pFedGraph/results/pfedg_cos/{args.dataset}/graph.csv",index=False) #save to file
+    else:
+        df = pd.DataFrame(t_np) #convert to a dataframe
+        df.to_csv(F"/Users/etiksha/Documents/btp/pFedGraph/results/pfedg_cos/{args.dataset}/graph.csv",index=False) #save to file
+
+    # open a file for writing
+    with open(F"/Users/etiksha/Documents/btp/pFedGraph/results/pfedg_cos/{args.dataset}/clusters.json", 'w') as f:
+        # write the dictionary to the file in JSON format
+        json.dump({k: cluster_model_vectors[k].numpy().tolist() for k in range(args.n_parties)}, f)
+
     print('-'*80)
+
+# Plot accuracies
+import matplotlib.pyplot as plt
+import numpy as np
+rounds_arr = np.arange(0, cfg["comm_round"])
+
+x = np.array(rounds_arr)
+ypoints = np.array(final_accuracy)
+plt.plot(x, ypoints)
+plt.xlabel("Rounds")
+plt.ylabel("Mean Best Personalised Test Accuracy")
+plt.legend()
+plt.show()
+plt.savefig(F'/Users/etiksha/Documents/btp/pFedGraph/results/pfedg_cos/{args.dataset}/mean.png')
+
+for i,clients_acc in enumerate(personalised_test_acc_list):
+  ypoints = np.array(clients_acc)
+  plt.plot(x, ypoints, label = 'client'+str(i))
+plt.xlabel("Rounds")
+plt.ylabel("Personalised Test Accuracy of each client")
+plt.legend()
+plt.show()
+plt.savefig(F'/Users/etiksha/Documents/btp/pFedGraph/results/pfedg_cos/{args.dataset}/clients.png')
  
+
+# Results
+# Namespace(gpu='7', model='simplecnn', dataset='cifar10', partition='noniid-skew', num_local_iterations=200, batch_size=64, lr=0.01, epochs=20, n_parties=10, comm_round=20, init_seed=0, dropout_p=0.0, datadir='./data/', beta=0.5, skew_class=2, reg=1e-05, log_file_name='logs', optimizer='sgd', sample_fraction=1.0, concen_loss='uniform_norm', weight_norm='relu', difference_measure='all', alpha=0.8, lam=0.01, attack_type='inv_grad', attack_ratio=0.0)
