@@ -7,11 +7,11 @@ def compute_local_test_accuracy(model, dataloader, data_distribution):
 
     total_label_num = np.zeros(len(data_distribution))
     correct_label_num = np.zeros(len(data_distribution))
-    model.cuda()
+    model
     generalized_total, generalized_correct = 0, 0
     with torch.no_grad():
         for batch_idx, (x, target) in enumerate(dataloader):
-            x, target = x.cuda(), target.to(dtype=torch.int64).cuda()
+            x, target = x, target.to(dtype=torch.int64)
             out = model(x)
             _, pred_label = torch.max(out.data, 1)
             correct_filter = (pred_label == target.data)
@@ -28,12 +28,12 @@ def compute_local_test_accuracy(model, dataloader, data_distribution):
     return personalized_correct / personalized_total, generalized_correct / generalized_total
 
 def compute_acc(net, test_data_loader):
-    net.cuda()
+    net
     net.eval()
     correct, total = 0, 0
     with torch.no_grad():
         for batch_idx, (x, target) in enumerate(test_data_loader):
-            x, target = x.cuda(), target.to(dtype=torch.int64).cuda()
+            x, target = x, target.to(dtype=torch.int64)
             out = net(x)
             _, pred_label = torch.max(out.data, 1)
             total += x.data.size()[0]

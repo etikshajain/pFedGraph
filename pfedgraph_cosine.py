@@ -14,6 +14,9 @@ from model import simplecnn, textcnn
 from prepare_data import get_dataloader
 from attack import *
 
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context
+
 
 def local_train_pfedgraph(args, round, nets_this_round, cluster_models, train_local_dls, val_local_dls, test_dl, data_distributions, best_val_acc_list, best_test_acc_list, benign_client_list):
     
@@ -41,9 +44,9 @@ def local_train_pfedgraph(args, round, nets_this_round, cluster_models, train_lo
             optimizer = optim.SGD(filter(lambda p: p.requires_grad, net.parameters()), lr=args.lr, momentum=0.9, weight_decay=args.reg)
         criterion = torch.nn.CrossEntropyLoss()
         if round > 0:
-            cluster_model = cluster_models[net_id].cuda()
+            cluster_model = cluster_models[net_id]
         
-        net.cuda()
+        net
         net.train()
         iterator = iter(train_local_dl)
         for iteration in range(args.num_local_iterations):
@@ -52,7 +55,7 @@ def local_train_pfedgraph(args, round, nets_this_round, cluster_models, train_lo
             except StopIteration:
                 iterator = iter(train_local_dl)
                 x, target = next(iterator)
-            x, target = x.cuda(), target.cuda()
+            x, target = x, target
             
             optimizer.zero_grad()
             target = target.long()
@@ -93,8 +96,12 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed(seed)
 random.seed(seed)
 
+
+# Number of clients in each round
 n_party_per_round = int(args.n_parties * args.sample_fraction)
 party_list = [i for i in range(args.n_parties)]
+
+# List of indices of active clients in each round
 party_list_rounds = []
 if n_party_per_round != args.n_parties:
     for i in range(args.comm_round):
@@ -103,10 +110,15 @@ else:
     for i in range(args.comm_round):
         party_list_rounds.append(party_list)
 
+print("Active clients in each round:")
+print(party_list_rounds)
+
+# Trustworthy clients
 benign_client_list = random.sample(party_list, int(args.n_parties * (1-args.attack_ratio)))
 benign_client_list.sort()
 print(f'>> -------- Benign clients: {benign_client_list} --------')
 
+# Distribute dataset among clients
 train_local_dls, val_local_dls, test_dl, net_dataidx_map, traindata_cls_counts, data_distributions = get_dataloader(args)
 
 if args.dataset == 'cifar10':
@@ -121,27 +133,36 @@ global_parameters = global_model.state_dict()
 local_models = []
 best_val_acc_list, best_test_acc_list = [],[]
 dw = []
+
+# Sending initial model to each client
 for i in range(cfg['client_num']):
     local_models.append(model(cfg['classes_size']))
     dw.append({key : torch.zeros_like(value) for key, value in local_models[i].named_parameters()})
     best_val_acc_list.append(0)
     best_test_acc_list.append(0)
 
-graph_matrix = torch.ones(len(local_models), len(local_models)) / (len(local_models)-1)                 # Collaboration Graph
-graph_matrix[range(len(local_models)), range(len(local_models))] = 0
-
 for net in local_models:
     net.load_state_dict(global_parameters)
 
-    
+# COLLABORATION GRAPH initialisation
+graph_matrix = torch.ones(len(local_models), len(local_models)) / (len(local_models)-1)                 # Collaboration Graph
+graph_matrix[range(len(local_models)), range(len(local_models))] = 0
+
+# Stores the cluster model corresponding to each client 
 cluster_model_vectors = {}
+
 for round in range(cfg["comm_round"]):
+    # List of active clients in each round
     party_list_this_round = party_list_rounds[round]
     if args.sample_fraction < 1.0:
         print(f'>> Clients in this round : {party_list_this_round}')
+    # Initialising models and params of each local client
     nets_this_round = {k: local_models[k] for k in party_list_this_round}
     nets_param_start = {k: copy.deepcopy(local_models[k]) for k in party_list_this_round}
 
+    # Perform local training at the clients
+    # Calculates the loss that appears to be related to cluster model of each client
+    # Returns the mean test accuracy of benign clients for aggregation at the federated server.
     mean_personalized_acc = local_train_pfedgraph(args, round, nets_this_round, cluster_model_vectors, train_local_dls, val_local_dls, test_dl, data_distributions, best_val_acc_list, best_test_acc_list, benign_client_list)
    
     total_data_points = sum([len(net_dataidx_map[k]) for k in party_list_this_round])
@@ -149,9 +170,13 @@ for round in range(cfg["comm_round"]):
 
     manipulate_gradient(args, None, nets_this_round, benign_client_list, nets_param_start)
 
+    # Update the collaboration graph
     graph_matrix = update_graph_matrix_neighbor(graph_matrix, nets_this_round, global_parameters, dw, fed_avg_freqs, args.alpha, args.difference_measure)   # Graph Matrix is not normalized yet
+
+    # Update the clustered model
     cluster_model_vectors = aggregation_by_graph(cfg, graph_matrix, nets_this_round, global_parameters)                                                    # Aggregation weight is normalized here
 
     print('>> (Current) Round {} | Local Per: {:.5f}'.format(round, mean_personalized_acc))
+    print(graph_matrix)
     print('-'*80)
  
