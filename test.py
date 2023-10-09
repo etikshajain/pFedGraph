@@ -31,6 +31,7 @@ def compute_acc(net, test_data_loader):
     net
     net.eval()
     correct, total = 0, 0
+    print(enumerate(test_data_loader))
     with torch.no_grad():
         for batch_idx, (x, target) in enumerate(test_data_loader):
             x, target = x, target.to(dtype=torch.int64)

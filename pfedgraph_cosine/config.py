@@ -46,6 +46,8 @@ def get_args():
         cfg['classes_size'] = 100
     elif args.dataset == 'tinyimagenet':
         cfg['classes_size'] = 200
+    elif args.dataset == 'iris':
+        cfg['classes_size'] = 3
     cfg['client_num'] = args.n_parties
     cfg['model_name'] = args.model
     cfg['self_wight'] = 'loss'

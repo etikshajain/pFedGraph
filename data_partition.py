@@ -6,6 +6,7 @@ def partition_data(partition, n_train, n_parties, train_label, beta = 0.5, skew_
         idxs = np.random.permutation(n_train)
         batch_idxs = np.array_split(idxs, n_parties)
         net_dataidx_map = {i: batch_idxs[i] for i in range(n_parties)}
+        print(net_dataidx_map)
         
     elif partition == 'noniid':
         min_size = 0
@@ -80,7 +81,7 @@ def partition_data(partition, n_train, n_parties, train_label, beta = 0.5, skew_
                 net_dataidx_map[16 + i] += label_idx[j][4000 + 250 * i : 4000 + 250 * (i + 1)]
         for i in range(20):
             random.shuffle(net_dataidx_map[i])
-            
+    print(train_label)
     traindata_cls_counts = record_net_data_stats(train_label, net_dataidx_map)
     data_distributions = traindata_cls_counts / traindata_cls_counts.sum(axis=1)[:,np.newaxis]
     return net_dataidx_map, traindata_cls_counts, data_distributions
@@ -96,7 +97,7 @@ def record_net_data_stats(y_train, net_dataidx_map):
         net_cls_counts_dict[net_i] = tmp
         tmp_npy = np.zeros(num_classes)
         for i in range(len(unq)):
-            tmp_npy[unq[i]] = unq_cnt[i]
+            tmp_npy[int(unq[i])] = unq_cnt[i]
         net_cls_counts_npy = np.concatenate(
                         (net_cls_counts_npy, tmp_npy), axis=0)
     net_cls_counts_npy = np.reshape(net_cls_counts_npy, (-1,num_classes))

@@ -78,4 +78,19 @@ def textcnn(n_classes):
         vocab_size = len(word_map)
     return TextCNN(n_classes, vocab_size, 256)
 
+
+class SimpleNN(nn.Module):
+    def __init__(self, input_dim, output_dim):
+        super(SimpleNN,self).__init__()
+        self.linear1 = nn.Linear(input_dim, output_dim)
+        self.relu = nn.ReLU()
+
+    def forward(self, img): #convert + flatten
+        # x = img.view(-1, 28*28)
+        x = self.relu(self.linear1(img))
+        return x
+
+def simplenn(n_classes):
+    return SimpleNN(input_dim=(4 * 1), output_dim=n_classes)
+
         
